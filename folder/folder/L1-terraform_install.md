@@ -34,3 +34,12 @@ Download AWSCLI latest version from [here](https://docs.aws.amazon.com/cli/lates
 
 or you can run the below command in powershell or the command prompt
 
+## Create IAM user for terraform
+- IAM > Add user > permissions: Attach policies directly
+- Choose AdministativeAccess + Create user
+- Go to tf user > security credentilas > create an access key for CLI. Download.csv file
+  Accesskey id: *********
+  Secret access key: ********
+- Store it in secure location.
+- Open cmd > aws configure > provide required keys, select region. Good to go :)
+
