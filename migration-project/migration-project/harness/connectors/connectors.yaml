@@ -1,0 +1,67 @@
+# harness/connectors/connectors.yaml
+# Connector definitions for GitHub + AWS (one per environment)
+
+# ─── GitHub Source Connector ──────────────────────────────────────────────────
+- connector:
+    name: GitHub Terraform Repo
+    identifier: github_terraform_repo
+    type: Github
+    spec:
+      url: https://github.com/retailco/migration-project
+      authentication:
+        type: Http
+        spec:
+          type: UsernameToken
+          spec:
+            username: git-service-account
+            tokenRef: github_pat_token   # Secret stored in Harness
+      apiAccess:
+        type: Token
+        spec:
+          tokenRef: github_pat_token
+      connectionType: Account
+
+# ─── AWS Connector — Dev ──────────────────────────────────────────────────────
+- connector:
+    name: AWS Dev Account
+    identifier: aws_connector_dev
+    type: Aws
+    spec:
+      credential:
+        type: ManualConfig
+        spec:
+          accessKey: <+secrets.getValue("aws_access_key_dev")>
+          secretKeyRef: aws_secret_key_dev
+      region: ap-south-1
+      delegateSelectors:
+        - harness-delegate-dev
+
+# ─── AWS Connector — Staging ──────────────────────────────────────────────────
+- connector:
+    name: AWS Staging Account
+    identifier: aws_connector_staging
+    type: Aws
+    spec:
+      credential:
+        type: ManualConfig
+        spec:
+          accessKey: <+secrets.getValue("aws_access_key_staging")>
+          secretKeyRef: aws_secret_key_staging
+      region: ap-south-1
+      delegateSelectors:
+        - harness-delegate-staging
+
+# ─── AWS Connector — Prod ─────────────────────────────────────────────────────
+- connector:
+    name: AWS Prod Account
+    identifier: aws_connector_prod
+    type: Aws
+    spec:
+      credential:
+        type: ManualConfig
+        spec:
+          accessKey: <+secrets.getValue("aws_access_key_prod")>
+          secretKeyRef: aws_secret_key_prod
+      region: ap-south-1
+      delegateSelectors:
+        - harness-delegate-prod

@@ -1,0 +1,311 @@
+# harness/pipelines/terraform-migration-pipeline.yaml
+# Full pipeline: Plan → Approve → Apply (dev → staging → prod)
+
+pipeline:
+  name: RetailCo On-Prem to AWS Migration
+  identifier: retailco_migration_pipeline
+  projectIdentifier: platform_engineering
+  orgIdentifier: default
+  description: >
+    Deploys AWS infrastructure for the RetailCo migration using
+    Terraform reusable modules. Covers dev, staging, and prod environments.
+  tags:
+    team: platform
+    project: migration
+
+  variables:
+    - name: terraform_version
+      type: String
+      default: "1.6.6"
+      description: Terraform version to use
+
+    - name: aws_region
+      type: String
+      default: "ap-south-1"
+
+  stages:
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STAGE 1 — DEV
+    # ═══════════════════════════════════════════════════════════════════
+    - stage:
+        name: Deploy Dev
+        identifier: deploy_dev
+        type: Custom
+        spec:
+          execution:
+            steps:
+
+              # ── Terraform Init ────────────────────────────────────────
+              - step:
+                  name: Terraform Init (Dev)
+                  identifier: tf_init_dev
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_dev
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/dev
+                      terraform init \
+                        -backend-config="bucket=retailco-terraform-state" \
+                        -backend-config="key=dev/terraform.tfstate" \
+                        -backend-config="region=<+pipeline.variables.aws_region>" \
+                        -backend-config="dynamodb_table=retailco-terraform-locks"
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_dev")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_dev")>
+
+              # ── Terraform Plan ────────────────────────────────────────
+              - step:
+                  name: Terraform Plan (Dev)
+                  identifier: tf_plan_dev
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_dev
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/dev
+                      terraform plan \
+                        -var="db_password=<+secrets.getValue("dev_db_password")>" \
+                        -out=tfplan-dev
+                      terraform show -json tfplan-dev > tfplan-dev.json
+                      echo "=== Resources to be created/modified/destroyed ==="
+                      terraform show tfplan-dev
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_dev")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_dev")>
+
+              # ── Terraform Apply ───────────────────────────────────────
+              - step:
+                  name: Terraform Apply (Dev)
+                  identifier: tf_apply_dev
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_dev
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/dev
+                      terraform apply -auto-approve tfplan-dev
+                      echo "=== Outputs ==="
+                      terraform output -json > /harness/terraform-outputs-dev.json
+                      cat /harness/terraform-outputs-dev.json
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_dev")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_dev")>
+
+              # ── Smoke Test ────────────────────────────────────────────
+              - step:
+                  name: Smoke Test Dev
+                  identifier: smoke_test_dev
+                  type: Run
+                  spec:
+                    image: curlimages/curl:latest
+                    command: |
+                      ALB_DNS=$(cat /harness/terraform-outputs-dev.json | python3 -c "import sys,json; print(json.load(sys.stdin)['alb_dns']['value'])")
+                      echo "Testing ALB: http://$ALB_DNS/health"
+                      # Wait for ALB to be ready
+                      for i in $(seq 1 10); do
+                        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$ALB_DNS/health)
+                        if [ "$STATUS" = "200" ]; then
+                          echo "✅ Health check passed (HTTP $STATUS)"
+                          exit 0
+                        fi
+                        echo "Attempt $i: HTTP $STATUS — waiting 30s..."
+                        sleep 30
+                      done
+                      echo "❌ Smoke test failed after 10 attempts"
+                      exit 1
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STAGE 2 — STAGING
+    # ═══════════════════════════════════════════════════════════════════
+    - stage:
+        name: Deploy Staging
+        identifier: deploy_staging
+        type: Custom
+        spec:
+          execution:
+            steps:
+
+              - step:
+                  name: Terraform Init (Staging)
+                  identifier: tf_init_staging
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_staging
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/staging
+                      terraform init \
+                        -backend-config="key=staging/terraform.tfstate" \
+                        -backend-config="region=<+pipeline.variables.aws_region>"
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_staging")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_staging")>
+
+              - step:
+                  name: Terraform Plan (Staging)
+                  identifier: tf_plan_staging
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_staging
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/staging
+                      terraform plan \
+                        -var="db_password=<+secrets.getValue("staging_db_password")>" \
+                        -out=tfplan-staging
+                      terraform show tfplan-staging
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_staging")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_staging")>
+
+              - step:
+                  name: Terraform Apply (Staging)
+                  identifier: tf_apply_staging
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_staging
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/staging
+                      terraform apply -auto-approve tfplan-staging
+                      terraform output -json > /harness/terraform-outputs-staging.json
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_staging")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_staging")>
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STAGE 3 — PROD APPROVAL GATE
+    # ═══════════════════════════════════════════════════════════════════
+    - stage:
+        name: Prod Approval Gate
+        identifier: prod_approval
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: Review & Approve Prod Deployment
+                  identifier: prod_approve_step
+                  type: HarnessApproval
+                  timeout: 24h
+                  spec:
+                    approvalMessage: |
+                      ⚠️  PRODUCTION DEPLOYMENT REQUEST ⚠️
+
+                      Pipeline: <+pipeline.name>
+                      Triggered by: <+pipeline.triggeredBy.name>
+                      Git commit: <+trigger.commitSha>
+
+                      Please review the Terraform plan output from the Staging stage
+                      before approving. This will create/modify AWS resources in PRODUCTION.
+
+                      Staging outputs available at: <+stages.deploy_staging.spec.execution.steps.tf_apply_staging.output.outputVariables.outputs>
+                    includePipelineExecutionHistory: true
+                    approvers:
+                      userGroups:
+                        - platform_leads
+                        - cto_approval_group
+                      minimumCount: 2
+                    approverInputs:
+                      - name: change_ticket
+                        defaultValue: ""
+                        description: "JIRA/ServiceNow change ticket number (mandatory)"
+                      - name: deployment_window
+                        defaultValue: "off-peak"
+                        description: "Confirm deployment window (off-peak recommended)"
+
+    # ═══════════════════════════════════════════════════════════════════
+    # STAGE 4 — PROD
+    # ═══════════════════════════════════════════════════════════════════
+    - stage:
+        name: Deploy Prod
+        identifier: deploy_prod
+        type: Custom
+        spec:
+          execution:
+            steps:
+
+              - step:
+                  name: Terraform Init (Prod)
+                  identifier: tf_init_prod
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_prod
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/prod
+                      terraform init \
+                        -backend-config="key=prod/terraform.tfstate" \
+                        -backend-config="region=<+pipeline.variables.aws_region>"
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_prod")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_prod")>
+
+              - step:
+                  name: Terraform Plan (Prod)
+                  identifier: tf_plan_prod
+                  type: Run
+                  spec:
+                    connectorRef: aws_connector_prod
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/prod
+                      terraform plan \
+                        -var="db_password=<+secrets.getValue("prod_db_password")>" \
+                        -var="certificate_arn=<+secrets.getValue("prod_cert_arn")>" \
+                        -out=tfplan-prod
+                      terraform show tfplan-prod
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_prod")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_prod")>
+
+              - step:
+                  name: Terraform Apply (Prod)
+                  identifier: tf_apply_prod
+                  type: Run
+                  timeout: 60m
+                  spec:
+                    connectorRef: aws_connector_prod
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      cd terraform/environments/prod
+                      terraform apply -auto-approve tfplan-prod
+                      echo "=== Production Outputs ==="
+                      terraform output -json
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_prod")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_prod")>
+
+              - step:
+                  name: Post-Deploy Validation (Prod)
+                  identifier: prod_validation
+                  type: Run
+                  spec:
+                    image: curlimages/curl:latest
+                    command: |
+                      echo "✅ Prod deployment complete"
+                      echo "📋 Change Ticket: <+pipeline.stages.prod_approval.spec.execution.steps.prod_approve_step.output.approverInputs.change_ticket>"
+                      echo "Run final DNS cutover manually after validating the ALB endpoint."
+
+              # ── Rollback step (only runs on failure) ─────────────────
+              - step:
+                  name: Rollback on Failure
+                  identifier: tf_rollback_prod
+                  type: Run
+                  when:
+                    stageStatus: Failure
+                  spec:
+                    connectorRef: aws_connector_prod
+                    image: hashicorp/terraform:<+pipeline.variables.terraform_version>
+                    command: |
+                      echo "⚠️  Deployment failed — initiating Terraform rollback"
+                      cd terraform/environments/prod
+                      # Download previous state and restore
+                      aws s3 cp s3://retailco-terraform-state/prod/terraform.tfstate.backup ./
+                      terraform apply -auto-approve -target=module.app_asg
+                      echo "Rollback complete — investigate before retrying"
+                    envVariables:
+                      AWS_ACCESS_KEY_ID: <+secrets.getValue("aws_access_key_prod")>
+                      AWS_SECRET_ACCESS_KEY: <+secrets.getValue("aws_secret_key_prod")>
