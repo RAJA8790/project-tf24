@@ -3,7 +3,7 @@
 
 pipeline:
   name: RetailCo Migration Pipeline
-  identifier: retailco_migration_pipeline
+  identifier: github_terraform_repo
   projectIdentifier: project-tf24        # ← your exact project ID
   orgIdentifier: default
   description: >
