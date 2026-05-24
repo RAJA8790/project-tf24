@@ -2,9 +2,9 @@
 # Full pipeline: Plan → Approve → Apply (dev → staging → prod)
 
 pipeline:
-  name: RetailCo On-Prem to AWS Migration
+  name: RetailCo Migration Pipeline
   identifier: retailco_migration_pipeline
-  projectIdentifier: platform_engineering
+  projectIdentifier: project-tf24        # ← your exact project ID
   orgIdentifier: default
   description: >
     Deploys AWS infrastructure for the RetailCo migration using
