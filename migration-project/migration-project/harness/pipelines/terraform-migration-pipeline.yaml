@@ -4,7 +4,8 @@
 pipeline:
   name: RetailCo Migration Pipeline
   identifier: github_terraform_repo
-  projectIdentifier: project-tf24        # ← your exact project ID
+  projectIdentifier: project-tf24 
+  branch: terraform-dev 
   orgIdentifier: default
   description: >
     Deploys AWS infrastructure for the RetailCo migration using
